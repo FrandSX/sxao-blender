@@ -1,7 +1,7 @@
 bl_info = {
     'name': 'SX Ambient Occlusion',
     'author': 'Jani Kahrama / Secret Exit Ltd.',
-    'version': (1, 0, 1),
+    'version': (1, 0, 2),
     'blender': (3, 2, 0),
     'location': 'View3D',
     'description': 'Vertex Ambient Occlusion Tool',
@@ -17,29 +17,6 @@ import math
 import bmesh
 import statistics
 from mathutils import Vector
-
-
-# ------------------------------------------------------------------------
-#    Globals
-# ------------------------------------------------------------------------
-class SXAO_sxglobals(object):
-    def __init__(self):
-        self.refreshInProgress = False
-        self.modalStatus = False
-        self.listItems = []
-        self.listIndices = {}
-        self.prevMode = 'OBJECT'
-        self.mode = None
-        self.modeID = None
-
-        self.prevSelection = []
-        self.prevComponentSelection = []
-
-        self.randomseed = 42
-
-
-    def __del__(self):
-        print('SX Tools: Exiting sxglobals')
 
 
 # ------------------------------------------------------------------------
@@ -78,58 +55,6 @@ class SXAO_utils(object):
         return xmin, xmax, ymin, ymax, zmin, zmax
 
 
-    def get_selection_bounding_box(self, objs):
-        vert_pos_list = []
-        for obj in objs:
-            mesh = obj.data
-            mat = obj.matrix_world
-            for vert in mesh.vertices:
-                if vert.select:
-                    vert_pos_list.append(mat @ vert.co)
-
-        bbx = [[None, None], [None, None], [None, None]]
-        for i, fvPos in enumerate(vert_pos_list):
-            # first vert
-            if i == 0:
-                bbx[0][0] = bbx[0][1] = fvPos[0]
-                bbx[1][0] = bbx[1][1] = fvPos[1]
-                bbx[2][0] = bbx[2][1] = fvPos[2]
-            else:
-                for j in range(3):
-                    if fvPos[j] < bbx[j][0]:
-                        bbx[j][0] = fvPos[j]
-                    elif fvPos[j] > bbx[j][1]:
-                        bbx[j][1] = fvPos[j]
-
-        return bbx[0][0], bbx[0][1], bbx[1][0], bbx[1][1], bbx[2][0], bbx[2][1]
-
-
-    def find_safe_mesh_offset(self, obj):
-        bias = 0.0001
-
-        mesh = obj.data
-        bm = bmesh.new()
-        bm.from_mesh(mesh)
-
-        max_distances = []
-
-        for vert in bm.verts:
-            vert_loc = vert.co
-            inv_normal = -1.0 * vert.normal.normalized()
-            bias_vec = inv_normal * bias
-            ray_origin = (vert_loc[0] + bias_vec[0], vert_loc[1] + bias_vec[1], vert_loc[2] + bias_vec[2])
-
-            hit, loc, normal, index = obj.ray_cast(ray_origin, inv_normal)
-
-            if hit:
-                dist = Vector((loc[0] - vert_loc[0], loc[1] - vert_loc[1], loc[2] - vert_loc[2])).length
-                if dist > 0.0:
-                    max_distances.append(dist)
-
-        bm.free
-        return min(max_distances)
-
-
     def __del__(self):
         print('SX Tools: Exiting utils')
 
@@ -147,7 +72,7 @@ class SXAO_generate(object):
 
     def ray_randomizer(self, count):
         hemiSphere = [None] * count
-        random.seed(sxglobals.randomseed)
+        random.seed(42)
 
         for i in range(count):
             u1 = random.random()
@@ -430,9 +355,7 @@ class SXAO_generate(object):
 
 # ------------------------------------------------------------------------
 #    Layer Functions
-#    NOTE: Objects must be in OBJECT mode before calling layer functions,
-#          use utils.mode_manager() before calling layer functions
-#          to set and track correct state
+#    NOTE: Objects must be in OBJECT mode before calling layer functions
 # ------------------------------------------------------------------------
 class SXAO_layers(object):
     def __init__(self):
@@ -488,6 +411,7 @@ class SXAO_tools(object):
 
     def __del__(self):
         print('SX Tools: Exiting tools')
+
 
 # ------------------------------------------------------------------------
 #    Core Functions
@@ -631,7 +555,6 @@ class SXAO_OT_applytool(bpy.types.Operator):
 # ------------------------------------------------------------------------
 #    Registration and initialization
 # ------------------------------------------------------------------------
-sxglobals = SXAO_sxglobals()
 utils = SXAO_utils()
 generate = SXAO_generate()
 layers = SXAO_layers()
