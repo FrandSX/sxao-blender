@@ -1,10 +1,11 @@
 # SX Ambient Occlusion
-![SX Ambient Occlusion](/images/sxao-intro.png)
+![SX Ambient Occlusion](/sxao-intro.png)
 A simple tool for vertex ambient occlusion in Blender.
 
 ### Features
 - Bakes vertex normal -based ambient occlusion into vertex colors (using custom attributes)
 - Allows blending between self-occlusion only and full scene occlusion
+- Supports an optional groundplane
 - Also supports mesh thickness (useful for subsurface and transmission effects)
 
 SXAO is a standalone separate release from [SX Tools for Blender](https://github.com/FrandSX/sxtools-blender).
