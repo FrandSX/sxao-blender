@@ -1,7 +1,7 @@
 bl_info = {
     'name': 'SX Ambient Occlusion',
     'author': 'Jani Kahrama / Secret Exit Ltd.',
-    'version': (1, 0, 0),
+    'version': (1, 0, 1),
     'blender': (3, 2, 0),
     'location': 'View3D',
     'description': 'Vertex Ambient Occlusion Tool',
@@ -620,6 +620,8 @@ class SXAO_OT_applytool(bpy.types.Operator):
             tools.apply_tool(objs, mode_dict[scene.toolmode])
             bpy.context.space_data.shading.type = 'SOLID'
             bpy.context.space_data.shading.color_type = 'VERTEX'
+            bpy.context.space_data.shading.light = 'FLAT'
+
             for obj in objs:
                 obj.data.attributes.active_color = obj.data.attributes[mode_dict[scene.toolmode]]
 
