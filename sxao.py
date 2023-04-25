@@ -157,9 +157,7 @@ class SXAO_generate(object):
                 vertPos = (vertLoc[0] + biasVec[0], vertLoc[1] + biasVec[1], vertLoc[2] + biasVec[2])
 
                 for (sample, _) in hemiSphere:
-                    sample.rotate(rotQuat)
-
-                    hit, loc, normal, index = obj.ray_cast(vertPos, sample, distance=raydistance)
+                    hit, loc, normal, _ = obj.ray_cast(vertPos, rotQuat @ Vector(sample), distance=raydistance)
 
                     if hit:
                         hitfunction(vert_id, loc, vertPos, dist_list)
