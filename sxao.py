@@ -1,7 +1,7 @@
 bl_info = {
     'name': 'SX Ambient Occlusion',
     'author': 'Jani Kahrama / Secret Exit Ltd.',
-    'version': (1, 0, 2),
+    'version': (1, 1, 0),
     'blender': (3, 2, 0),
     'location': 'View3D',
     'description': 'Vertex Ambient Occlusion Tool',
@@ -82,10 +82,16 @@ class SXAO_generate(object):
 
             x = r * math.cos(theta)
             y = r * math.sin(theta)
+            z = math.sqrt(max(0, 1 - u1))
 
-            hemiSphere[i] = (x, y, math.sqrt(max(0, 1 - u1)))
+            ray = Vector((x, y, z))
+            up_vector = Vector((0, 0, 1))
+            
+            dot_product = ray.dot(up_vector)
+            hemiSphere[i] = (ray, dot_product)
 
-        return hemiSphere
+        sorted_hemiSphere = sorted(hemiSphere, key=lambda x: x[1], reverse=True)
+        return sorted_hemiSphere
 
 
     def ground_plane(self, size, pos):
@@ -150,8 +156,7 @@ class SXAO_generate(object):
                 # offset ray origin with normal bias
                 vertPos = (vertLoc[0] + biasVec[0], vertLoc[1] + biasVec[1], vertLoc[2] + biasVec[2])
 
-                for sample in hemiSphere:
-                    sample = Vector(sample)
+                for (sample, _) in hemiSphere:
                     sample.rotate(rotQuat)
 
                     hit, loc, normal, index = obj.ray_cast(vertPos, sample, distance=raydistance)
@@ -188,25 +193,37 @@ class SXAO_generate(object):
             return None
 
 
-    def occlusion_list(self, obj, raycount=500, blend=0.5, dist=10.0, groundplane=False):
+    def occlusion_list(self, obj, raycount=250, blend=0.5, dist=10.0, groundplane=False, masklayer=None):
+        # start_time = time.time()
+
         scene = bpy.context.scene
         contribution = 1.0/float(raycount)
         hemiSphere = self.ray_randomizer(raycount)
         mix = max(min(blend, 1.0), 0.0)
         forward = Vector((0.0, 0.0, 1.0))
 
+        if obj.sx2.tiling:
+            blend = 0.0
+            groundplane = False
+            obj.modifiers['sxTiler'].show_viewport = False
+            bpy.context.view_layer.update()
+            xmin, xmax, ymin, ymax, zmin, zmax = utils.get_object_bounding_box([obj, ], local=True)
+            dist = 2.0 * min(xmax-xmin, ymax-ymin, zmax-zmin)
+            obj.modifiers['sxTiler'].show_viewport = True
+
         edg = bpy.context.evaluated_depsgraph_get()
         obj_eval = obj.evaluated_get(edg)
 
         vert_occ_dict = {}
-        vert_dict = self.vertex_data_dict(obj)
+        vert_dict = self.vertex_data_dict(obj, dots=True)
 
         if len(vert_dict.keys()) > 0:
 
             if groundplane:
                 pivot = utils.find_root_pivot([obj, ])
-                pivot = (pivot[0], pivot[1], -0.5)  # pivot[2] - 0.5)
-                ground, groundmesh = self.ground_plane(20, pivot)
+                pivot = (pivot[0], pivot[1], pivot[2] - 0.5)
+                size = max(obj.dimensions) * 10
+                ground, groundmesh = self.ground_plane(size, pivot)
 
             for vert_id in vert_dict:
                 bias = 0.001
@@ -216,54 +233,86 @@ class SXAO_generate(object):
                 vertNormal = Vector(vert_dict[vert_id][1])
                 vertWorldLoc = Vector(vert_dict[vert_id][2])
                 vertWorldNormal = Vector(vert_dict[vert_id][3])
+                min_dot = vert_dict[vert_id][4]
+
+                # use modified tile-border normals to reduce seam artifacts
+                # if vertex pos x y z is at bbx limit, and mirror axis is set, modify respective normal vector component to zero
+                if obj.sx2.tiling:
+                    mod_normal = list(vertNormal)
+                    match = False
+
+                    tiling_props = [('tile_neg_x', 'tile_pos_x'), ('tile_neg_y', 'tile_pos_y'), ('tile_neg_z', 'tile_pos_z')]
+                    bounds = [(xmin, xmax), (ymin, ymax), (zmin, zmax)]
+
+                    for i, coord in enumerate(vertLoc):
+                        for j, prop in enumerate(tiling_props[i]):
+                            if getattr(obj.sx2, prop) and (round(coord, 2) == round(bounds[i][j], 2)):
+                                match = True
+                                mod_normal[i] = 0.0
+
+                    if match:
+                        vertNormal = Vector(mod_normal[:]).normalized()
 
                 # Pass 0: Raycast for bias
-                hit, loc, normal, index = obj.ray_cast(vertLoc, vertNormal, distance=dist)
+                hit, loc, normal, _ = obj.ray_cast(vertLoc, vertNormal, distance=dist)
                 if hit and (normal.dot(vertNormal) > 0):
-                    hit_dist = Vector((loc[0] - vertLoc[0], loc[1] - vertLoc[1], loc[2] - vertLoc[2])).length
+                    hit_dist = (loc - vertLoc).length
                     if hit_dist < 0.5:
                         bias += hit_dist
 
-                # Pass 1: Local space occlusion for individual object
+                # Pass 1: Mark hits for rays that are inside the mesh
+                first_hit_index = raycount
+                for i, (_, dot) in enumerate(hemiSphere):
+                    if dot < min_dot:
+                        first_hit_index = i
+                        break
+
+                valid_rays = [ray for ray, _ in hemiSphere[:first_hit_index]]
+                occValue -= contribution * (raycount - first_hit_index)
+
+                # Store Pass 2 valid ray hits
+                pass2_hits = [False] * len(valid_rays)
+
+                # Pass 2: Local space occlusion for individual object
                 if 0.0 <= mix < 1.0:
-                    biasVec = tuple([bias*x for x in vertNormal])
                     rotQuat = forward.rotation_difference(vertNormal)
 
                     # offset ray origin with normal bias
-                    vertPos = (vertLoc[0] + biasVec[0], vertLoc[1] + biasVec[1], vertLoc[2] + biasVec[2])
+                    vertPos = vertLoc + (bias * vertNormal)
 
-                    for sample in hemiSphere:
-                        sample = Vector(sample)
-                        sample.rotate(rotQuat)
+                    # for every object ray hit, subtract a fraction from the vertex brightness
+                    for i, ray in enumerate(valid_rays):
+                        hit = obj_eval.ray_cast(vertPos, rotQuat @ Vector(ray), distance=dist)[0]
+                        occValue -= contribution * hit
+                        pass2_hits[i] = hit
 
-                        hit, loc, normal, index = obj_eval.ray_cast(vertPos, sample, distance=dist)
-
-                        if hit:
-                            occValue -= contribution
-
-                # Pass 2: Worldspace occlusion for scene
+                # Pass 3: Worldspace occlusion for scene
                 if 0.0 < mix <= 1.0:
-                    biasVec = tuple([bias*x for x in vertWorldNormal])
                     rotQuat = forward.rotation_difference(vertWorldNormal)
 
                     # offset ray origin with normal bias
-                    scnVertPos = (vertWorldLoc[0] + biasVec[0], vertWorldLoc[1] + biasVec[1], vertWorldLoc[2] + biasVec[2])
+                    scnVertPos = vertWorldLoc + (bias * vertWorldNormal)
 
-                    for sample in hemiSphere:
-                        sample = Vector(sample)
-                        sample.rotate(rotQuat)
+                    # Include previous pass results
+                    scnOccValue = occValue
 
-                        scnHit, scnLoc, scnNormal, scnIndex, scnObj, ma = scene.ray_cast(edg, scnVertPos, sample, distance=dist)
-                        # scene.ray_cast(scene.view_layers[0].depsgraph, scnVertPos, sample, distance=dist)
-
-                        if scnHit:
-                            scnOccValue -= contribution
+                    # Fire rays only for samples that had not hit in Pass 2
+                    for i, ray in enumerate(valid_rays):
+                        if not pass2_hits[i]:
+                            hit = scene.ray_cast(edg, scnVertPos, rotQuat @ Vector(ray), distance=dist)[0]
+                            scnOccValue -= contribution * hit
 
                 vert_occ_dict[vert_id] = float((occValue * (1.0 - mix)) + (scnOccValue * mix))
 
             if groundplane:
                 bpy.data.objects.remove(ground, do_unlink=True)
                 bpy.data.meshes.remove(groundmesh, do_unlink=True)
+
+            if obj.sx2.tiling:
+                obj.modifiers['sxTiler'].show_viewport = False
+
+            # end_time = time.time()  # Stop the timer
+            # print("SX Tools: AO rendered in {:.4f} seconds".format(end_time - start_time)) 
 
             return generate.vert_dict_to_loop_list(obj, vert_occ_dict, 1, 4)
 
@@ -337,14 +386,43 @@ class SXAO_generate(object):
         return loop_list
 
 
-    def vertex_data_dict(self, obj):
+    def vertex_data_dict(self, obj, dots=False):
+
+        def add_to_dict(vert_id):
+            min_dot = None
+            if dots:
+                dot_list = []
+                vert = bm.verts[vert_id]
+                num_connected = len(vert.link_edges)
+                if num_connected > 0:
+                    for edge in vert.link_edges:
+                        dot_list.append((vert.normal.normalized()).dot((edge.other_vert(vert).co - vert.co).normalized()))
+                min_dot = min(dot_list)
+
+            vertex_dict[vert_id] = (
+                mesh.vertices[vert_id].co,
+                mesh.vertices[vert_id].normal,
+                mat @ mesh.vertices[vert_id].co,
+                (mat @ mesh.vertices[vert_id].normal - mat @ Vector()).normalized(),
+                min_dot
+            )
+
         mesh = obj.data
         mat = obj.matrix_world
         ids = self.vertex_id_list(obj)
 
+        if dots:
+            bm = bmesh.new()
+            bm.from_mesh(mesh)
+            bm.normal_update()
+            bmesh.types.BMVertSeq.ensure_lookup_table(bm.verts)
+
         vertex_dict = {}
         for vert_id in ids:
-            vertex_dict[vert_id] = (mesh.vertices[vert_id].co, mesh.vertices[vert_id].normal, mat @ mesh.vertices[vert_id].co, (mat @ mesh.vertices[vert_id].normal - mat @ Vector()).normalized())
+            add_to_dict(vert_id)
+
+        if dots:
+            bm.free()
 
         return vertex_dict
 
