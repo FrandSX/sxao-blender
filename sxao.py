@@ -122,6 +122,223 @@ class SXAO_generate(object):
         return groundPlane, mesh
 
 
+    def create_occlusion_network(self, raycount):
+        def ray_randomizer(count):
+            hemiSphere = [None] * count
+            random.seed(42)
+
+            for i in range(count):
+                r = math.sqrt(random.random())
+                theta = 2 * math.pi * random.random()
+                hemiSphere[i] = (r, theta, 0)
+
+            sorted_hemiSphere = sorted(hemiSphere, key=lambda x: x[1], reverse=True)
+            return sorted_hemiSphere
+
+
+        def connect_nodes(output, input):
+            nodetree.links.new(output, input)
+
+
+        nodetree = bpy.data.node_groups.new(type='GeometryNodeTree', name='sx_ao')
+
+        # expose bias and ground plane inputs
+        group_in = nodetree.nodes.new(type='NodeGroupInput')
+        group_in.name = 'group_input'
+        group_in.location = (-1000, 0)
+
+        geometry = nodetree.inputs.new('NodeSocketGeometry', 'Geometry')
+
+        bias = nodetree.inputs.new('NodeSocketFloat', 'Ray Bias')
+        bias.min_value = 0
+        bias.max_value = 1
+        bias.default_value = 0.001
+
+        ground_plane = nodetree.inputs.new('NodeSocketBool', 'Ground Plane')
+        ground_plane.default_value = False
+
+        ground_offset = nodetree.inputs.new('NodeSocketFloat', 'Ground Plane Offset')
+        ground_offset.default_value = 0
+
+        # expose group color output
+        group_out = nodetree.nodes.new(type='NodeGroupOutput')
+        group_out.name = 'group_output'
+        group_out.location = (2000, 0)
+
+        geometry_out = nodetree.outputs.new('NodeSocketGeometry', 'Geometry')
+        color_out = nodetree.outputs.new('NodeSocketColor', 'Color Output')
+        color_out.attribute_domain = 'POINT'
+        color_out.default_attribute_name = 'Occlusion'
+        color_out.default_value = (1, 1, 1, 1)
+
+        # vertex inputs
+        index = nodetree.nodes.new(type='GeometryNodeInputIndex')
+        index.name = 'index'
+        index.location = (-1000, 200)
+        index.hide = True
+
+        normal = nodetree.nodes.new(type='GeometryNodeInputNormal')
+        normal.name = 'normal'
+        normal.location = (-1000, 150)
+        normal.hide = True
+
+        position = nodetree.nodes.new(type='GeometryNodeInputPosition')
+        position.name = 'position'
+        position.location = (-1000, 100)
+        position.hide = True
+
+        eval_normal = nodetree.nodes.new(type='GeometryNodeFieldAtIndex')
+        eval_normal.name = 'eval_normal'
+        eval_normal.location = (-800, 200)
+        eval_normal.data_type = 'FLOAT_VECTOR'
+        eval_normal.domain = 'POINT'
+        eval_normal.hide = True
+
+        eval_position = nodetree.nodes.new(type='GeometryNodeFieldAtIndex')
+        eval_position.name = 'eval_position'
+        eval_position.location = (-800, 150)
+        eval_position.data_type = 'FLOAT_VECTOR'
+        eval_position.domain = 'POINT'
+        eval_position.hide = True
+
+        bias_normal = nodetree.nodes.new(type='ShaderNodeVectorMath')
+        bias_normal.name = 'bias_normal'
+        bias_normal.location = (-600, 200)
+        bias_normal.operation = 'MULTIPLY'
+        bias_normal.hide = True
+
+        bias_pos = nodetree.nodes.new(type='ShaderNodeVectorMath')
+        bias_pos.name = 'bias_pos'
+        bias_pos.location = (-400, 200)
+        bias_pos.operation = 'ADD'
+        bias_pos.hide = True
+
+        connect_nodes(group_in.outputs['Geometry'], group_out.inputs['Geometry'])
+
+        connect_nodes(index.outputs['Index'], eval_normal.inputs['Index'])
+        connect_nodes(index.outputs['Index'], eval_position.inputs['Index'])
+        connect_nodes(normal.outputs['Normal'], eval_normal.inputs[3])
+        connect_nodes(position.outputs['Position'], eval_position.inputs[3])
+
+        connect_nodes(eval_normal.outputs[2], bias_normal.inputs[0])
+        connect_nodes(group_in.outputs['Ray Bias'], bias_normal.inputs[1])
+
+        connect_nodes(bias_normal.outputs[0], bias_pos.inputs[0])
+        connect_nodes(eval_position.outputs[2], bias_pos.inputs[1])
+
+
+        # optional ground plane
+        bbx = nodetree.nodes.new(type='GeometryNodeBoundBox')
+        bbx.name = 'bbx'
+        bbx.location = (-800, -200)
+        bbx.hide = True
+
+        bbx_min_separate = nodetree.nodes.new(type='ShaderNodeSeparateXYZ')
+        bbx_min_separate.name = 'bbx_min_separate'
+        bbx_min_separate.location = (-600, -200)
+        bbx_min_separate.hide = True
+
+        ground_bias = nodetree.nodes.new(type='ShaderNodeMath')
+        ground_bias.name = 'ground_bias'
+        ground_bias.location = (-400, -150)
+        ground_bias.operation = 'SUBTRACT'
+        ground_bias.inputs[1].default_value = 0.001
+        ground_bias.hide = True
+
+        ground_offset_add = nodetree.nodes.new(type='ShaderNodeMath')
+        ground_offset_add.name = 'add_hits'
+        ground_offset_add.location = (-400, -200)
+        ground_offset_add.operation = 'ADD'
+        ground_offset_add.inputs[1].default_value = 0
+        ground_offset_add.hide = True
+
+        bbx_min_combine = nodetree.nodes.new(type='ShaderNodeCombineXYZ')
+        bbx_min_combine.name = 'bbx_min_combine'
+        bbx_min_combine.location = (-200, -200)
+        bbx_min_combine.hide = True
+
+        bbx_multiply = nodetree.nodes.new(type='ShaderNodeVectorMath')
+        bbx_multiply.name = 'bbx_multiply'
+        bbx_multiply.location = (-600, -250)
+        bbx_multiply.operation = 'MULTIPLY'
+        bbx_multiply.inputs[1].default_value = (10, 10, 10)
+        bbx_multiply.hide = True
+
+        ground_grid = nodetree.nodes.new(type='GeometryNodeMeshGrid')
+        ground_grid.name = 'ground_grid'
+        ground_grid.location = (-200, -150)
+        ground_grid.inputs[2].default_value = 2
+        ground_grid.inputs[3].default_value = 2
+        ground_grid.hide = True
+
+        ground_transform = nodetree.nodes.new(type='GeometryNodeTransform')
+        ground_transform.name = 'ground_transform'
+        ground_transform.location = (0, -200)
+        ground_transform.hide = True     
+
+        join = nodetree.nodes.new(type='GeometryNodeJoinGeometry')
+        join.name = 'join'
+        join.location = (200, -150)
+        join.hide = True
+
+        ground_switch = nodetree.nodes.new(type='GeometryNodeSwitch')
+        ground_switch.name = 'ground_switch'
+        ground_switch.location = (400, -100)
+        ground_switch.input_type = 'GEOMETRY'
+        ground_switch.hide = True
+
+        connect_nodes(group_in.outputs['Geometry'], bbx.inputs['Geometry'])
+        connect_nodes(bbx.outputs['Min'], bbx_min_separate.inputs[0])
+        connect_nodes(group_in.outputs['Ground Plane Offset'], ground_bias.inputs[0])
+        connect_nodes(ground_bias.outputs[0], ground_offset_add.inputs[0])
+        connect_nodes(bbx_min_separate.outputs['Z'], ground_offset_add.inputs[1])
+        connect_nodes(ground_offset_add.outputs[0], bbx_min_combine.inputs['Z'])
+        connect_nodes(bbx.outputs['Max'], bbx_multiply.inputs[0])
+        connect_nodes(bbx_min_combine.outputs[0], ground_transform.inputs['Translation'])
+        connect_nodes(bbx_multiply.outputs[0], ground_transform.inputs['Scale'])
+        connect_nodes(ground_grid.outputs['Mesh'], ground_transform.inputs['Geometry'])
+        connect_nodes(group_in.outputs['Geometry'], join.inputs[0])
+        connect_nodes(ground_transform.outputs['Geometry'], join.inputs[0])
+        connect_nodes(group_in.outputs['Ground Plane'], ground_switch.inputs[1])
+        connect_nodes(group_in.outputs['Geometry'], ground_switch.inputs[14])
+        connect_nodes(join.outputs['Geometry'], ground_switch.inputs[15])
+
+        # create raycasts with a loop
+        hemisphere = ray_randomizer(raycount)
+        previous = None
+        for i in range(raycount):
+            random_rot = nodetree.nodes.new(type='ShaderNodeVectorRotate')
+            random_rot.name = 'random_rot'
+            random_rot.location = (600, i * 100 + 400)
+            random_rot.rotation_type = 'EULER_XYZ'
+            random_rot.inputs[4].default_value = hemisphere[i]
+            random_rot.hide =True
+
+            raycast = nodetree.nodes.new(type='GeometryNodeRaycast')
+            raycast.name = 'raycast'
+            raycast.location = (800, i * 100 + 400)
+            raycast.inputs[8].default_value = 10
+            raycast.hide = True
+
+            if previous is not None:
+                add_hits = nodetree.nodes.new(type='ShaderNodeMath')
+                add_hits.name = 'add_hits'
+                add_hits.location = (1000, i * 100 + 400)
+                add_hits.operation = 'ADD'
+                add_hits.hide = True
+                connect_nodes(raycast.outputs[0], add_hits.inputs[0])
+                connect_nodes(previous.outputs[0], add_hits.inputs[1])
+                previous = add_hits
+            else:
+                previous = raycast
+
+            connect_nodes(eval_normal.outputs[2], random_rot.inputs['Vector'])
+            connect_nodes(bias_pos.outputs[0], random_rot.inputs['Center'])
+            connect_nodes(ground_switch.outputs[6], raycast.inputs['Target Geometry'])
+            connect_nodes(random_rot.outputs[0], raycast.inputs['Ray Direction'])
+            connect_nodes(bias_pos.outputs[0], raycast.inputs['Source Position'])
+
+
     def thickness_list(self, obj, raycount):
 
         def dist_hit(vert_id, loc, vertPos, dist_list):
@@ -200,15 +417,6 @@ class SXAO_generate(object):
         mix = max(min(blend, 1.0), 0.0)
         forward = Vector((0.0, 0.0, 1.0))
 
-        if obj.sx2.tiling:
-            blend = 0.0
-            groundplane = False
-            obj.modifiers['sxTiler'].show_viewport = False
-            bpy.context.view_layer.update()
-            xmin, xmax, ymin, ymax, zmin, zmax = utils.get_object_bounding_box([obj, ], local=True)
-            dist = 2.0 * min(xmax-xmin, ymax-ymin, zmax-zmin)
-            obj.modifiers['sxTiler'].show_viewport = True
-
         edg = bpy.context.evaluated_depsgraph_get()
         obj_eval = obj.evaluated_get(edg)
 
@@ -232,24 +440,6 @@ class SXAO_generate(object):
                 vertWorldLoc = Vector(vert_dict[vert_id][2])
                 vertWorldNormal = Vector(vert_dict[vert_id][3])
                 min_dot = vert_dict[vert_id][4]
-
-                # use modified tile-border normals to reduce seam artifacts
-                # if vertex pos x y z is at bbx limit, and mirror axis is set, modify respective normal vector component to zero
-                if obj.sx2.tiling:
-                    mod_normal = list(vertNormal)
-                    match = False
-
-                    tiling_props = [('tile_neg_x', 'tile_pos_x'), ('tile_neg_y', 'tile_pos_y'), ('tile_neg_z', 'tile_pos_z')]
-                    bounds = [(xmin, xmax), (ymin, ymax), (zmin, zmax)]
-
-                    for i, coord in enumerate(vertLoc):
-                        for j, prop in enumerate(tiling_props[i]):
-                            if getattr(obj.sx2, prop) and (round(coord, 2) == round(bounds[i][j], 2)):
-                                match = True
-                                mod_normal[i] = 0.0
-
-                    if match:
-                        vertNormal = Vector(mod_normal[:]).normalized()
 
                 # Pass 0: Raycast for bias
                 hit, loc, normal, _ = obj.ray_cast(vertLoc, vertNormal, distance=dist)
@@ -305,9 +495,6 @@ class SXAO_generate(object):
             if groundplane:
                 bpy.data.objects.remove(ground, do_unlink=True)
                 bpy.data.meshes.remove(groundmesh, do_unlink=True)
-
-            if obj.sx2.tiling:
-                obj.modifiers['sxTiler'].show_viewport = False
 
             # end_time = time.time()  # Stop the timer
             # print("SX Tools: AO rendered in {:.4f} seconds".format(end_time - start_time)) 
