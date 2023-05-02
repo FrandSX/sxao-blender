@@ -8,7 +8,7 @@ A simple tool for vertex ambient occlusion in Blender.
 - Supports an optional groundplane
 - Also supports mesh thickness (useful for subsurface and transmission effects)
 
-SXAO is a standalone separate release from [SX Tools for Blender](https://github.com/FrandSX/sxtools-blender).
+SXAO is a standalone separate release from [SX Tools 2 for Blender](https://github.com/FrandSX/sxtools2-blender).
 
 (c) 2017-2022 Jani Kahrama / Secret Exit Ltd.
 
