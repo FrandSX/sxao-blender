@@ -1,8 +1,8 @@
 bl_info = {
     'name': 'SX Ambient Occlusion',
     'author': 'Jani Kahrama / Secret Exit Ltd.',
-    'version': (1, 1, 0),
-    'blender': (3, 2, 0),
+    'version': (1, 3, 0),
+    'blender': (3, 5, 0),
     'location': 'View3D',
     'description': 'Vertex Ambient Occlusion Tool',
     'doc_url': 'https://www.notion.so/SX-Tools-for-Blender-Documentation-9ad98e239f224624bf98246822a671a6',
@@ -168,7 +168,7 @@ class SXAO_generate(object):
         geometry_out = nodetree.outputs.new('NodeSocketGeometry', 'Geometry')
         color_out = nodetree.outputs.new('NodeSocketColor', 'Color Output')
         color_out.attribute_domain = 'POINT'
-        color_out.default_attribute_name = 'Occlusion'
+        color_out.default_attribute_name = 'occlusion'
         color_out.default_value = (1, 1, 1, 1)
 
         # vertex inputs
@@ -337,6 +337,25 @@ class SXAO_generate(object):
             connect_nodes(ground_switch.outputs[6], raycast.inputs['Target Geometry'])
             connect_nodes(random_rot.outputs[0], raycast.inputs['Ray Direction'])
             connect_nodes(bias_pos.outputs[0], raycast.inputs['Source Position'])
+
+
+        # normalize hit results
+        div_hits = nodetree.nodes.new(type='ShaderNodeMath')
+        div_hits.name = 'add_hits'
+        div_hits.location = (1400, 300)
+        div_hits.operation = 'DIVIDE'
+        div_hits.inputs[1].default_value = raycount
+
+        color_mix = nodetree.nodes.new(type='ShaderNodeMix')
+        color_mix.name = 'color_mix'
+        color_mix.data_type = 'RGBA'
+        color_mix.location = (1600, 300)
+        color_mix.inputs[6].default_value = (1, 1, 1, 1)
+        color_mix.inputs[7].default_value = (0, 0, 0, 1)
+
+        connect_nodes(add_hits.outputs[0], div_hits.inputs[0])
+        connect_nodes(div_hits.outputs[0], color_mix.inputs[0])
+        connect_nodes(color_mix.outputs[2], group_out.inputs['Color Output'])
 
 
     def thickness_list(self, obj, raycount):
@@ -700,6 +719,26 @@ def expand_element(self, context, element):
         setattr(context.scene.sxao, element, True)
 
 
+def toggle_sxao(self, context):
+    objs = selection_validator(self, context)
+    for obj in objs:
+        if 'sxAO' not in obj.modifiers:
+            if 'sx_ao' not in bpy.data.node_groups:
+                generate.create_occlusion_network(100)
+                ao = obj.modifiers.new(type='NODES', name='sxAO')
+                ao.node_group = bpy.data.node_groups['sx_ao']
+        if 'occlusion' not in obj.data.attributes:
+            obj.data.attributes.new(name='occlusion', type='FLOAT_COLOR', domain='CORNER')
+            obj.data.attributes.active_color = obj.data.attributes['occlusion']
+
+        obj.modifiers['sxAO'].show_viewport = bpy.context.scene.sxao.occlusionnodes
+        obj.modifiers["sxAO"]["Input_2"] = bpy.context.scene.sxao.occlusiongroundplane
+        obj.modifiers["sxAO"]["Input_3"] = bpy.context.scene.sxao.occlusiongroundplaneoffset
+
+    if bpy.context.scene.sxao.occlusionnodes:
+        bpy.context.space_data.shading.color_type = 'VERTEX'
+
+
 class SXAO_sceneprops(bpy.types.PropertyGroup):
     toolmode: bpy.props.EnumProperty(
         name='Tool Mode',
@@ -735,6 +774,18 @@ class SXAO_sceneprops(bpy.types.PropertyGroup):
         name='Ground Plane',
         description='Enable temporary ground plane for occlusion (height -0.5)',
         default=True)
+
+    occlusionnodes: bpy.props.BoolProperty(
+        name='Geonode AO',
+        description='Enable experimental geometry nodes based AO',
+        default=False,
+        update=toggle_sxao)
+
+    occlusiongroundplaneoffset: bpy.props.FloatProperty(
+        name='Ground Offset',
+        description='Set node AO ground level. Default is bottom of object bounding box.',
+        default=0.0,
+        update=toggle_sxao)
 
     expandfill: bpy.props.BoolProperty(
         name='Expand Fill',
@@ -782,6 +833,11 @@ class SXAO_PT_panel(bpy.types.Panel):
 
                     if scene.occlusionblend == 0:
                         row_ground.enabled = False
+
+                    col_fill.prop(scene, 'occlusionnodes')
+                    if scene.occlusionnodes:
+                        col_fill.prop(scene, 'occlusiongroundplaneoffset')
+
         else:
             col = layout.column()
             col.label(text='Select one or multiple meshes to continue')
