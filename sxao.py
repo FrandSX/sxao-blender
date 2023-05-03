@@ -1,7 +1,7 @@
 bl_info = {
     'name': 'SX Ambient Occlusion',
     'author': 'Jani Kahrama / Secret Exit Ltd.',
-    'version': (1, 3, 0),
+    'version': (1, 3, 1),
     'blender': (3, 5, 0),
     'location': 'View3D',
     'description': 'Vertex Ambient Occlusion Tool',
@@ -159,6 +159,8 @@ class SXAO_generate(object):
 
         ground_offset = nodetree.inputs.new('NodeSocketFloat', 'Ground Plane Offset')
         ground_offset.default_value = 0
+
+        ray_loops = nodetree.inputs.new('NodeSocketInt', 'Raycount')
 
         # expose group color output
         group_out = nodetree.nodes.new(type='NodeGroupOutput')
@@ -353,7 +355,7 @@ class SXAO_generate(object):
         color_mix.inputs[6].default_value = (1, 1, 1, 1)
         color_mix.inputs[7].default_value = (0, 0, 0, 1)
 
-        connect_nodes(add_hits.outputs[0], div_hits.inputs[0])
+        connect_nodes(previous.outputs[0], div_hits.inputs[0])
         connect_nodes(div_hits.outputs[0], color_mix.inputs[0])
         connect_nodes(color_mix.outputs[2], group_out.inputs['Color Output'])
 
@@ -722,18 +724,27 @@ def expand_element(self, context, element):
 def toggle_sxao(self, context):
     objs = selection_validator(self, context)
     for obj in objs:
-        if 'sxAO' not in obj.modifiers:
-            if 'sx_ao' not in bpy.data.node_groups:
-                generate.create_occlusion_network(100)
-                ao = obj.modifiers.new(type='NODES', name='sxAO')
-                ao.node_group = bpy.data.node_groups['sx_ao']
         if 'occlusion' not in obj.data.attributes:
             obj.data.attributes.new(name='occlusion', type='FLOAT_COLOR', domain='CORNER')
             obj.data.attributes.active_color = obj.data.attributes['occlusion']
 
-        obj.modifiers['sxAO'].show_viewport = bpy.context.scene.sxao.occlusionnodes
-        obj.modifiers["sxAO"]["Input_2"] = bpy.context.scene.sxao.occlusiongroundplane
-        obj.modifiers["sxAO"]["Input_3"] = bpy.context.scene.sxao.occlusiongroundplaneoffset
+        if 'sxAO' not in obj.modifiers:
+            if 'sx_ao' not in bpy.data.node_groups:
+                generate.create_occlusion_network(bpy.context.scene.sxao.occlusionrays)
+
+            ao = obj.modifiers.new(type='NODES', name='sxAO')
+            ao.node_group = bpy.data.node_groups['sx_ao']
+
+        if 'sxAO' in obj.modifiers:
+            if bpy.context.scene.sxao.occlusionnodes and (obj.modifiers["sxAO"]["Input_4"] != bpy.context.scene.sxao.occlusionrays):
+                bpy.data.node_groups.remove(bpy.data.node_groups['sx_ao'], do_unlink=True)
+                generate.create_occlusion_network(bpy.context.scene.sxao.occlusionrays)
+                obj.modifiers['sxAO'].node_group = bpy.data.node_groups['sx_ao']
+
+            obj.modifiers['sxAO'].show_viewport = bpy.context.scene.sxao.occlusionnodes
+            obj.modifiers["sxAO"]["Input_2"] = bpy.context.scene.sxao.occlusiongroundplane
+            obj.modifiers["sxAO"]["Input_3"] = bpy.context.scene.sxao.occlusiongroundplaneoffset
+            obj.modifiers["sxAO"]["Input_4"] = bpy.context.scene.sxao.occlusionrays
 
     if bpy.context.scene.sxao.occlusionnodes:
         bpy.context.space_data.shading.color_type = 'VERTEX'
@@ -760,8 +771,9 @@ class SXAO_sceneprops(bpy.types.PropertyGroup):
         name='Ray Count',
         description='Increase ray count to reduce noise',
         min=1,
-        max=5000,
-        default=500)
+        max=1000,
+        default=100,
+        update=toggle_sxao)
 
     occlusiondistance: bpy.props.FloatProperty(
         name='Ray Distance',
@@ -826,8 +838,12 @@ class SXAO_PT_panel(bpy.types.Panel):
                 if scene.toolmode == 'OCC' or scene.toolmode == 'THK':
                     col_fill.prop(scene, 'occlusionrays', slider=True, text='Ray Count')
                 if scene.toolmode == 'OCC':
-                    col_fill.prop(scene, 'occlusionblend', slider=True, text='Local/Global Mix')
-                    col_fill.prop(scene, 'occlusiondistance', slider=True, text='Ray Distance')
+                    if not scene.occlusionnodes:
+                        col_fill.prop(scene, 'occlusionblend', slider=True, text='Local/Global Mix')
+                        col_fill.prop(scene, 'occlusiondistance', slider=True, text='Ray Distance')
+                    if scene.occlusionnodes and scene.occlusiongroundplane:
+                        col_fill.prop(scene, 'occlusiongroundplaneoffset')
+
                     row_ground = col_fill.row(align=False)
                     row_ground.prop(scene, 'occlusiongroundplane', text='Ground Plane')
 
@@ -835,8 +851,8 @@ class SXAO_PT_panel(bpy.types.Panel):
                         row_ground.enabled = False
 
                     col_fill.prop(scene, 'occlusionnodes')
-                    if scene.occlusionnodes:
-                        col_fill.prop(scene, 'occlusiongroundplaneoffset')
+
+                        
 
         else:
             col = layout.column()
