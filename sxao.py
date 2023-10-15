@@ -1,7 +1,7 @@
 bl_info = {
     'name': 'SX Ambient Occlusion',
     'author': 'Jani Kahrama / Secret Exit Ltd.',
-    'version': (1, 3, 1),
+    'version': (1, 3, 2),
     'blender': (3, 5, 0),
     'location': 'View3D',
     'description': 'Vertex Ambient Occlusion Tool',
@@ -13,6 +13,7 @@ bl_info = {
 
 import bpy
 import random
+import time
 import math
 import bmesh
 import statistics
