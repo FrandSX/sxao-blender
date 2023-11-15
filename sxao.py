@@ -1,7 +1,7 @@
 bl_info = {
     'name': 'SX Ambient Occlusion',
     'author': 'Jani Kahrama / Secret Exit Ltd.',
-    'version': (1, 3, 2),
+    'version': (1, 4, 2),
     'blender': (3, 5, 0),
     'location': 'View3D',
     'description': 'Vertex Ambient Occlusion Tool',
@@ -19,6 +19,8 @@ import bmesh
 import statistics
 from mathutils import Vector
 
+
+version, _, _ = bpy.app.version
 
 # ------------------------------------------------------------------------
 #    Useful Miscellaneous Functions
@@ -148,28 +150,34 @@ class SXAO_generate(object):
         group_in.name = 'group_input'
         group_in.location = (-1000, 0)
 
-        geometry = nodetree.inputs.new('NodeSocketGeometry', 'Geometry')
+        if version == 4:
+            geometry = nodetree.interface.new_socket(in_out='INPUT', name='Geometry', socket_type='NodeSocketGeometry')
+            ray_loops = nodetree.interface.new_socket(in_out='INPUT', name='Raycount', socket_type='NodeSocketInt')
+            bias = nodetree.interface.new_socket(in_out='INPUT', name='Ray Bias', socket_type='NodeSocketFloat')
+            ground_plane = nodetree.interface.new_socket(in_out='INPUT', name='Ground Plane', socket_type='NodeSocketBool')
+            ground_offset = nodetree.interface.new_socket(in_out='INPUT', name='Ground Plane Offset', socket_type='NodeSocketFloat')
+            geometry_out = nodetree.interface.new_socket(in_out='OUTPUT', name='Geometry', socket_type='NodeSocketGeometry')
+            color_out = nodetree.interface.new_socket(in_out='OUTPUT', name='Color Output', socket_type='NodeSocketColor')
+        else:
+            geometry = nodetree.inputs.new('NodeSocketGeometry', 'Geometry')
+            ray_loops = nodetree.inputs.new('NodeSocketInt', 'Raycount')
+            bias = nodetree.inputs.new('NodeSocketFloat', 'Ray Bias')
+            ground_plane = nodetree.inputs.new('NodeSocketBool', 'Ground Plane')
+            ground_offset = nodetree.inputs.new('NodeSocketFloat', 'Ground Plane Offset')
+            geometry_out = nodetree.outputs.new('NodeSocketGeometry', 'Geometry')
+            color_out = nodetree.outputs.new('NodeSocketColor', 'Color Output')
 
-        bias = nodetree.inputs.new('NodeSocketFloat', 'Ray Bias')
         bias.min_value = 0
         bias.max_value = 1
         bias.default_value = 0.001
-
-        ground_plane = nodetree.inputs.new('NodeSocketBool', 'Ground Plane')
         ground_plane.default_value = False
-
-        ground_offset = nodetree.inputs.new('NodeSocketFloat', 'Ground Plane Offset')
         ground_offset.default_value = 0
-
-        ray_loops = nodetree.inputs.new('NodeSocketInt', 'Raycount')
 
         # expose group color output
         group_out = nodetree.nodes.new(type='NodeGroupOutput')
         group_out.name = 'group_output'
         group_out.location = (2000, 0)
 
-        geometry_out = nodetree.outputs.new('NodeSocketGeometry', 'Geometry')
-        color_out = nodetree.outputs.new('NodeSocketColor', 'Color Output')
         color_out.attribute_domain = 'POINT'
         color_out.default_attribute_name = 'occlusion'
         color_out.default_value = (1, 1, 1, 1)
@@ -320,7 +328,10 @@ class SXAO_generate(object):
             raycast = nodetree.nodes.new(type='GeometryNodeRaycast')
             raycast.name = 'raycast'
             raycast.location = (800, i * 100 + 400)
-            raycast.inputs[8].default_value = 10
+            if version == 4:
+                raycast.inputs[9].default_value = 10
+            else:
+                raycast.inputs[8].default_value = 10
             raycast.hide = True
 
             if previous is not None:
@@ -737,15 +748,24 @@ def toggle_sxao(self, context):
             ao.node_group = bpy.data.node_groups['sx_ao']
 
         if 'sxAO' in obj.modifiers:
-            if bpy.context.scene.sxao.occlusionnodes and (obj.modifiers["sxAO"]["Input_4"] != bpy.context.scene.sxao.occlusionrays):
+            if version == 4:
+                socket_name_0 = 'Socket_1'
+                socket_name_1 = 'Socket_3'
+                socket_name_2 = 'Socket_4'
+            else:
+                socket_name_0 = 'Input_4'
+                socket_name_1 = 'Input_2'
+                socket_name_2 = 'Input_3'
+
+            if bpy.context.scene.sxao.occlusionnodes and (obj.modifiers["sxAO"][socket_name_0] != bpy.context.scene.sxao.occlusionrays):
                 bpy.data.node_groups.remove(bpy.data.node_groups['sx_ao'], do_unlink=True)
                 generate.create_occlusion_network(bpy.context.scene.sxao.occlusionrays)
                 obj.modifiers['sxAO'].node_group = bpy.data.node_groups['sx_ao']
 
             obj.modifiers['sxAO'].show_viewport = bpy.context.scene.sxao.occlusionnodes
-            obj.modifiers["sxAO"]["Input_2"] = bpy.context.scene.sxao.occlusiongroundplane
-            obj.modifiers["sxAO"]["Input_3"] = bpy.context.scene.sxao.occlusiongroundplaneoffset
-            obj.modifiers["sxAO"]["Input_4"] = bpy.context.scene.sxao.occlusionrays
+            obj.modifiers["sxAO"][socket_name_1] = bpy.context.scene.sxao.occlusiongroundplane
+            obj.modifiers["sxAO"][socket_name_2] = bpy.context.scene.sxao.occlusiongroundplaneoffset
+            obj.modifiers["sxAO"][socket_name_0] = bpy.context.scene.sxao.occlusionrays
 
     if bpy.context.scene.sxao.occlusionnodes:
         bpy.context.space_data.shading.color_type = 'VERTEX'
@@ -786,7 +806,8 @@ class SXAO_sceneprops(bpy.types.PropertyGroup):
     occlusiongroundplane: bpy.props.BoolProperty(
         name='Ground Plane',
         description='Enable temporary ground plane for occlusion (height -0.5)',
-        default=True)
+        default=True,
+        update=toggle_sxao)
 
     occlusionnodes: bpy.props.BoolProperty(
         name='Geonode AO',
