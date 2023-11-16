@@ -1,7 +1,7 @@
 bl_info = {
     'name': 'SX Ambient Occlusion',
     'author': 'Jani Kahrama / Secret Exit Ltd.',
-    'version': (1, 4, 2),
+    'version': (1, 4, 3),
     'blender': (3, 5, 0),
     'location': 'View3D',
     'description': 'Vertex Ambient Occlusion Tool',
@@ -358,7 +358,8 @@ class SXAO_generate(object):
         div_hits.name = 'add_hits'
         div_hits.location = (1400, 300)
         div_hits.operation = 'DIVIDE'
-        div_hits.inputs[1].default_value = raycount
+
+        connect_nodes(group_in.outputs['Raycount'], div_hits.inputs[1])
 
         color_mix = nodetree.nodes.new(type='ShaderNodeMix')
         color_mix.name = 'color_mix'
